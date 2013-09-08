@@ -1,0 +1,106 @@
+#!/bin/bash
+#TODO: determine audio bitrate from video
+#TODO: Fix filenames
+#TODO: check if installed: LAME, lame plugin, vbrfix
+
+VERBOSITY_LEVEL="1"
+
+if [ $# -lt "1" ] ; then
+	echo "mp3vert, a program for converting any audio or video file to an mp3"
+	echo -e "Useage: \t$0 INPUT [options]\n\t-o \toutputfile\n\t-y/-n \tremove original [yes/no] (must be last)"
+	exit
+fi
+
+Start=$(date +%s)
+while [ "$1" != "" ] ; do
+	input="$1"
+	#TODO: change following line to cut extension by use of sed
+	output="${1:0:(-4)}.mp3"
+	if [ "$2" != "" ] ; then
+		if [ "$2" == "-o" ] ; then
+			output="$3"
+			shift 2
+		fi
+		if [ "$2" == "-n" ] ; then
+			READ="n"
+			shift 1
+		elif [ "$2" == "-y" ] ; then
+			READ="y"
+			shift 1
+		else
+			READ="y" #if doing multiple files, then auto set -y
+		fi
+	fi
+	
+	tempFile="/tmp/$RANDOM.temp.$output"
+	if [ "$input" == "$output" ] ; then
+		echo "ERROR: Input and Output files are the same!" > /dev/stderr
+		exit 0
+	fi
+	if [ -f "$input" ] ; then
+		#file exists
+		if [ -f "$output" ] ; then
+			echo -en "WARNING: \"$output\" already exists. \nOverwrite [y/N]? "
+			OVERWRITE=""
+			read OVERWRITE
+			if [ "$OVERWRITE" != "y" ] ; then
+				exit 0
+			fi
+		fi
+	
+		#start conversion
+		touch "$output"
+		if [ -f "$output" ] ; then
+			rm "$output"
+			echo "Ripping: \"$input\" to \"$output\""
+		
+			## mencoder works, but outputs at strange bitrate and length isnt correct
+			## also outputs a much larger file. I dont know if it is outputting junk data or what
+			#mencoder $input -of rawaudio -oac mp3lame -ovc copy -o $output
+		
+			## ffmpeg works, outputs at constant 64kbps. I dont know if I can get better though
+			#-aq gives highest quality variable bitrate for mp3, 255 is highest for aac
+			ffmpeg -v $VERBOSITY_LEVEL -i "$input" -aq 0 "$tempFile"
+			if [ -f "$tempFile" ] ; then
+				vbrlength "$tempFile" -o "$output" #> /dev/null
+			#else
+			#	echo "ERROR: conversion failed. Temporary file does not exist." > /dev/stderr
+			fi
+		else
+			echo "ERROR: Could not create output file: \"$output\"" > /dev/stderr
+		fi
+	
+		#would you like to delete
+		if [ -f "$output" ] ; then
+			#TODO: use sed or something to get complete size
+			size=`du -b "$output"`
+			size="${size:0:1}" #gets first char of file size which should be non-zero
+		
+			if [ "$size" -gt "0" ] ; then
+				echo "DONE: \"$output\" converted."
+				rm "$tempFile"
+				End=$(date +%s)
+				if [ "$READ" == "" ] ; then
+					echo -n "Remove original [y/N]? "
+					read READ
+				fi
+				if [ "$READ" == "y" ] ; then
+					rm "$input"
+				fi
+			else
+				echo "ERROR: conversion failed. \"$output\" is empty." > /dev/stderr
+				rm "$output"
+			fi
+		elif [ -f "$tempFile" ] ; then 
+			mv "$tempFile" "$output"
+			echo "WARNING: vbrfix failed. Output still created" > /dev/stderr
+		else
+			echo "ERROR: conversion failed. \"$output\" does not exist." > /dev/stderr
+		fi
+	else
+		echo "ERROR: Input file \"$input\" does not exist" > /dev/stderr
+	fi
+	shift 1
+done
+Diff=`date -d "00:00:00 $(( ${End} - ${Start} )) seconds" +"%M:%S"`
+echo "All files completed: $Diff"

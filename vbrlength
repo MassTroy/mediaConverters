@@ -1,0 +1,60 @@
+#!/bin/bash
+#TODO: check if installed: vbrfix #kinda fixed
+#TODO: dont break when there is a slash in the filename
+
+if [ "$#" -lt "1" ] ; then
+	echo "vbrlength, a program for correcting song length on vbr files"
+	echo -e "Useage: \t$0 INPUT_FILE\n\t-o \tOUTPUT_FILE"
+	exit
+fi
+
+while [ "$1" != "" ] ; do
+	input="$1"
+	#TODO: change following line to cut extension by use of sed
+	output="$1"
+	if [ "$2" == "-o" ] ; then
+		output="$3"
+		shift 2
+	else
+		tempFile="/tmp/$RANDOM.temp.$input"
+		mv "$input" "$tempFile"
+		input="$tempFile"
+	fi
+	
+	if [ -f "$input" ] ; then
+		Start=$(date +%s)
+		vbrfix -always -makevbr "$input" "$output" > /dev/null
+		if [ -f "vbrfix.log" ] ; then
+			rm "vbrfix.log"
+		else
+			echo -e "\nERROR: Dependacies not met! Please install package 'vbrfix'\n" > /dev/stderr
+		fi
+		if [ -f "vbrfix.tmp" ] ; then
+			rm "vbrfix.tmp"
+		fi
+		End=$(date +%s)
+		Diff=`date -d "00:00:00 $(( ${End} - ${Start} )) seconds" +"%M:%S"`
+	
+		#would you like to delete
+		if [ -f "$output" ] ; then
+			#TODO: use sed or something to get complete size
+			size=`du -b "$output"`
+			size="${size:0:1}" #gets first char of file size which should be non-zero
+		
+			if [ "$size" -gt "0" ] ; then
+				echo "DONE: \"$output\" fixed. $Diff"
+			elif [ -f "$input" ] ; then
+				mv "$input" "$output"
+				echo "ERROR: fix failed. Restoring" > /dev/stderr
+			else
+				echo "ERROR: fix failed. Cannot restore" > /dev/stderr
+			fi
+		elif [ -f "$input" ] ; then 
+			mv "$input" "$output"
+			echo "ERROR: fix failed. Restoring" > /dev/stderr
+		fi
+	else
+		echo "ERROR: Input file \"$input\" does not exist" > /dev/stderr
+	fi
+	shift 1
+done

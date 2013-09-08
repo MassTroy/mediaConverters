@@ -1,0 +1,314 @@
+#!/bin/bash
+
+# SETTINGS
+
+FILE_EXTENSION="mp4"
+VIDEO_CODEX="libx264"
+#AUDIO_CODEX=""
+
+SMALL_RATIO=60 #output file looks to small (percentage)
+LARGE_RATIO=100 #output file looks to big (percentage)
+
+AV_CONV_COMMAND="avconv"
+THREADS=4
+BACKUP_DIR="./mp4vert-backup"
+LOG_FILE="/tmp/mp4vert.log"
+################################################################################
+## NOTES ##
+
+# Good formats:
+#Video: h264
+#Video: mpeg4
+#Audio: aac
+#Audio: mp3
+
+# Okay formats:
+#Video: mjpeg
+
+# Unacceptable
+#Video: msmpeg4
+#Video: wmv3
+
+#other AUDIO (havent been checked)
+#Audio: ac3
+#Audio: dca
+#Audio: pcm_s16le
+#Audio: wmav2
+
+#TODO: caputure ctrl+C in child, treat as conversion failure, remove, then terminate
+################################################################################
+# HELPER FUNCTIONS
+function printHelp {
+	echo "mp4vert, a program for converting any video file to an mp4"
+	echo -e "Usage: \t$0 INPUT [options]"
+	echo -e "\t--full\tConvert codex and container"
+	echo -e "\t--copy\tCopy codex to new container"
+	echo -e "\t--smart\tCopies good codecs or converts bad ones (default)"
+	echo -e "\t-o \t[outputfile]"
+	#echo -e "\t--status \tPrint status only (supresses avconv output)" #TODO: add summary only
+	#echo -e "\t--summary \tOnly print the summary" #TODO: add summary only
+	#echo -e "\t--log \t[logfile]" #TODO: add quiet functionality
+	#echo -e "\t--noprompt \tTreat any prompts as errors" #TODO: 
+	echo -e "\t-y/-n/-b \tremove original [yes/no] or backup (must come after file)"
+}
+function timeDiff {
+	start=$1
+	end=$2
+	totalDiff=$(( ${end} - ${start} ))
+	hourDiff=$((${totalDiff} / 3600))
+	minuteDiff=$(((${totalDiff}/60%60)))
+	secondDiff=$(((${totalDiff} % 60)))
+	echo "$hourDiff:$minuteDiff:$secondDiff"
+}
+function backup {
+	input=$1
+	dir=`dirname "$input"`
+	file=`basename "$input"`
+	if [[ "$dir" == /* ]] ; then
+		dir=${dir:1}
+	fi
+	if [ "$dir" == "" ] ; then
+		dir="."
+	fi
+	backDir="$BACKUP_DIR/$dir"
+	mkdir -p "$backDir"
+	mv "$input" "$backDir/$file"
+}
+
+################################################################################
+# CONVERSION FUNCTIONS
+function fastConvert {
+	input=$1
+	output=$2
+	$AV_CONV_COMMAND -i "$input" -threads $THREADS -acodec copy -vcodec copy -f $FILE_EXTENSION "$output" 2>&1 | tee "$LOG_FILE"
+}
+function fullConvert {
+	input=$1
+	output=$2
+	#TODO: specify audio codec
+	$AV_CONV_COMMAND -i "$input" -threads $THREADS -vcodec $VIDEO_CODEX -f $FILE_EXTENSION "$output" | tee "$LOG_FILE"
+}
+#TODO: add convert_video&copy_audio and copy_video&convert_audio functions
+function smartConvert {
+	input=$1
+	output=$2
+	
+	#read the video codec from the file
+	videoCodec=`$AV_CONV_COMMAND -i "$input" 2>&1 | grep --only-matching -E "Video: [^ ,]+"`
+	audioCodec=`$AV_CONV_COMMAND -i "$input" 2>&1 | grep --only-matching -E "Audio: [^ ,]+"`
+	# Good formats:
+		#Video: h264
+		#Video: mpeg4
+	#TODO: check audio codex
+	if [[ "$videoCodec" == "Video: h264" ]] ; then
+		failure=false
+		
+		#codec format is acceptable, use fast format
+		echo "INFO: Attempting fast conversion. (copy codex)"
+		fastConvert "$input" "$output"
+		
+		#if fast convert failed, default to full
+		if [ ! -f "$output" ] ; then
+			failure=true
+		elif [ `du -b "$output" | awk '{print $1}'` == "0" ] ; then
+			failure=true
+		fi
+		if [ $failure == true ] ; then
+			echo "INFO: Fast converstion failed. Attempting full conversion."
+			rm "$output"
+			fullConvert "$input" "$output"
+		fi
+	else
+		#unacceptable codec format, use full
+		echo -e "INFO: Bad codec: \"$videoCodec\". Running full conversion."
+		fullConvert "$input" "$output"
+	fi
+}
+
+################################################################################
+# MAIN PROGRAM
+if [ $# -lt "1" ] ; then
+	printHelp
+	exit
+fi
+copy=false
+smart=false
+full=false
+if [ "$1" == "--help" ] ; then
+	printHelp
+	exit
+elif [ "$1" == "--full" ] ; then
+	full=true
+	shift 1
+elif [ "$1" == "--smart" ] ; then
+	smart=true
+	shift 1
+elif [ "$1" == "--copy" ] ; then
+	copy=true
+	shift 1
+fi
+
+## set initial values
+succeed=""
+countSucceed=0
+failed=""
+countFailed=0
+skipped=""
+countSkipped=0
+allStart=$(date +%s)
+
+#clear log if exists
+if [ -f "$LOG_FILE" ] ; then
+	#TODO: archive old logs
+	rm "$LOG_FILE"
+fi
+
+# begin parsing each file
+while [ "$1" != "" ] ; do
+	input="$1"
+	output="${input%.*}.$FILE_EXTENSION" #cut file extension and add .$FILE_EXTENSION
+	
+	#parse arguements
+	if [ "$2" != "" ] ; then
+		if [ "$2" == "-o" ] ; then # user passed output file
+			output="$3"
+			shift 2
+		fi
+		if [ "$2" == "-n" ] ; then # user would not like to delete
+			READ="n"
+			shift 1
+		elif [ "$2" == "-y" ] ; then # user would like to delete
+			READ="y"
+			shift 1
+		elif [ "$2" == "-b" ] ; then # user would like to create a backup
+			READ="b"
+		else #if doing multiple files, then auto set -b
+			READ="b"
+		fi
+	fi
+	shift 1 # move cursor to next file
+	
+	#make sure that files arent the same
+	if [ "$input" == "$output" ] ; then
+		echo "ERROR: Input and Output files are the same!" > /dev/stderr
+		skipped=$skipped"IN_OUT_SAME: $input\n"
+		countSkipped=$(($countSkipped+1))
+		#skip this file
+		continue
+	fi
+	
+	#make sure input file exists
+	if [ -f "$input" ] ; then
+		#ask if overwriting
+		if [ -f "$output" ] ; then
+			echo -en "WARNING: \"$output\" already exists. \nOVER WRITE [y/N]? "
+			overWrite=""
+			read overWrite
+			if [ "$overWrite" != "y" ] ; then
+				#skip this file
+				skipped=$skipped"NO_OVERRIGHT: $input\n"
+				countSkipped=$(($countSkipped+1))
+				continue
+			fi
+			#TODO: should make backup of file being overwritten
+		fi
+	
+		#start conversion
+		start=$(date +%s)
+		inSize=`du -b "$input" | awk '{print $1}'`
+		
+		touch "$output"
+		if [ -f "$output" ] ; then
+			rm "$output"
+			echo "Ripping: \"$input\" to \"$output\""
+			
+			if [ $full == true ] ; then
+				fullConvert "$input" "$output"
+			elif [ $copy == true ] ; then
+				fastConvert "$input" "$output"
+			else
+				smartConvert "$input" "$output"
+			fi
+		else
+			echo "ERROR: Could not create output file: \"$output\"" > /dev/stderr
+			failed=$failed"NO_OUTPUT: $input\n"
+			countFailed=$(($countFailed+1))
+			continue
+		fi
+		
+		#was the output file created
+		if [ -f "$output" ] ; then
+			end=$(date +%s)
+			outSize=`du -b "$output" | awk '{print $1}'`
+			ratioPercent=$(( 100*$outSize / $inSize ))
+		
+			#was there data in the output file
+			if [ "$outSize" == "0" ] ; then
+				echo "ERROR: conversion failed. \"$output\" is empty." > /dev/stderr
+				failed=$failed"EMPTY_OUTPUT: $input\n"
+				countFailed=$(($countFailed+1))
+				rm "$output"
+				continue
+			else
+				#file looks good, call it a success
+				Diff=`timeDiff $start $end`
+				echo -e "Completed \"$input\" to \"$output\"\n\tTime: $Diff\tRatio: $ratioPercent%"
+				succeed=$succeed"DONE: $output\n\tTime: $Diff\tRatio: $ratioPercent%\n"
+				countSucceed=$(($countSucceed+1))
+				
+				#would you like to delete original
+				if [ "$READ" == "" ] ; then
+					echo -n "Remove original [y/N]? "
+					read READ
+				fi
+				if [ "$READ" == "y" ] ; then
+					rm "$input"
+				elif [ "$READ" == "b" ] ; then
+					backup "$input"
+				fi
+			fi
+			
+			#add warnings about file sizes
+			if [ "$outSize" -gt "$inSize" ] ; then
+				#the file got bigger
+				echo -e "WARNING: Output larger than input.\tRatio: $ratioPercent%"
+				succeed=$succeed"\tWARNING: Output larger than input.\tRatio: $ratioPercent%\n"
+				echo -e "\tWas: ${inSize} bytes\tIs: ${outSize} bytes\tDiff: "$(($outSize-$inSize))" bytes"
+			elif [ "$ratioPercent" -le "$SMALL_RATIO" ] ; then
+				#output file is very small in comparison
+				echo -e "WARNING: Very small output file.\tRatio: $ratioPercent%\tSize: "`du -h "$output" | awk '{print $1}'`
+				succeed=$succeed"\tWARNING: Very small output file.\tRatio: $ratioPercent%\tSize: "`du -h "$output" | awk '{print $1}'`"\n"
+			fi
+		else
+			echo "ERROR: conversion failed. \"$output\" does not exist." > /dev/stderr
+			failed=$failed"NO_OUTPUT: $input\n"
+			countFailed=$(($countFailed+1))
+			continue
+		fi
+	else
+		echo "ERROR: Input file \"$input\" does not exist" > /dev/stderr
+		skipped=$skipped"NO_INPUT: $input\n"
+		countSkipped=$(($countSkipped+1))
+	fi
+	echo ""
+done
+
+#print results
+#TODO: add total sizes and space saved
+AllDiff=`timeDiff $allStart $end`
+echo "Conversion(s) completed. Time: $AllDiff"
+
+if [ "$succeed" != "" ] ; then
+	echo "Files succeeded: $countSucceed"
+	echo -e "$succeed"
+fi
+if [ "$failed" != "" ] ; then
+	echo "Files failed: $countFailed"
+	echo -e "$failed"
+fi
+if [ "$skipped" != "" ] ; then
+	echo "Files skipped: $countSkipped"
+	echo -e "$skipped"
+fi
+totalFiles=$(($countSucceed+$countFailed+$countSkipped))
+echo -e "Total Files: $totalFiles\tSucceeded: $countSucceed\tFailed: $countFailed\tSkipped: $countSkipped"
