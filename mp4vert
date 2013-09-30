@@ -6,8 +6,9 @@ FILE_EXTENSION="mp4"
 VIDEO_CODEX="libx264"
 #AUDIO_CODEX=""
 
-SMALL_RATIO=60 #output file looks to small (percentage)
-LARGE_RATIO=100 #output file looks to big (percentage)
+VERY_SMALL_RATIO=10 #output file is way too small (percentage)
+SMALL_RATIO=50 #output file looks to small (percentage)
+#LARGE_RATIO=100 #output file looks to big (percentage)
 
 AV_CONV_COMMAND="avconv"
 THREADS=4
@@ -38,20 +39,20 @@ LOG_FILE="/tmp/mp4vert.log"
 #TODO: caputure ctrl+C in child, treat as conversion failure, remove, then terminate
 ################################################################################
 # HELPER FUNCTIONS
-function printHelp {
+function printHelp() {
 	echo "mp4vert, a program for converting any video file to an mp4"
 	echo -e "Usage: \t$0 INPUT [options]"
 	echo -e "\t--full\tConvert codex and container"
 	echo -e "\t--copy\tCopy codex to new container"
 	echo -e "\t--smart\tCopies good codecs or converts bad ones (default)"
 	echo -e "\t-o \t[outputfile]"
-	#echo -e "\t--status \tPrint status only (supresses avconv output)" #TODO: add summary only
-	#echo -e "\t--summary \tOnly print the summary" #TODO: add summary only
-	#echo -e "\t--log \t[logfile]" #TODO: add quiet functionality
-	#echo -e "\t--noprompt \tTreat any prompts as errors" #TODO: 
-	echo -e "\t-y/-n/-b \tremove original [yes/no] or backup (must come after file)"
+	#echo -e "\t--status \tPrint status only (supresses avconv output)" #TODO:
+	#echo -e "\t--summary \tOnly print the summary" #TODO:
+	#echo -e "\t--log \t[logfile]" #TODO:
+	#echo -e "\t--noprompt \tTreat any prompts as errors" #TODO:
+	echo -e "\t-y/-n/-b \tremove original [yes/no] or backup (must come after file)" #TODO: allow this flag at any point
 }
-function timeDiff {
+function timeDiff() {
 	start=$1
 	end=$2
 	totalDiff=$(( ${end} - ${start} ))
@@ -60,7 +61,7 @@ function timeDiff {
 	secondDiff=$(((${totalDiff} % 60)))
 	echo "$hourDiff:$minuteDiff:$secondDiff"
 }
-function backup {
+function backup() {
 	input=$1
 	dir=`dirname "$input"`
 	file=`basename "$input"`
@@ -73,6 +74,12 @@ function backup {
 	backDir="$BACKUP_DIR/$dir"
 	mkdir -p "$backDir"
 	mv "$input" "$backDir/$file"
+}
+function printWarning() {
+	echo -e "\e[01;33m$@\e[01;37m"
+}
+function printError() {
+	echo -e "\e[00;31m$@\e[01;37m"
 }
 
 ################################################################################
@@ -190,7 +197,7 @@ while [ "$1" != "" ] ; do
 	
 	#make sure that files arent the same
 	if [ "$input" == "$output" ] ; then
-		echo "ERROR: Input and Output files are the same!" > /dev/stderr
+		printError "ERROR: Input and Output files are the same!" > /dev/stderr
 		skipped=$skipped"IN_OUT_SAME: $input\n"
 		countSkipped=$(($countSkipped+1))
 		#skip this file
@@ -230,7 +237,7 @@ while [ "$1" != "" ] ; do
 				smartConvert "$input" "$output"
 			fi
 		else
-			echo "ERROR: Could not create output file: \"$output\"" > /dev/stderr
+			printError "ERROR: Could not create output file: \"$output\"" > /dev/stderr
 			failed=$failed"NO_OUTPUT: $input\n"
 			countFailed=$(($countFailed+1))
 			continue
@@ -243,8 +250,14 @@ while [ "$1" != "" ] ; do
 			ratioPercent=$(( 100*$outSize / $inSize ))
 		
 			#was there data in the output file
-			if [ "$outSize" == "0" ] ; then
-				echo "ERROR: conversion failed. \"$output\" is empty." > /dev/stderr
+			if [ "$ratioPercent" -le "$VERY_SMALL_RATIO" ] ; then
+				printError "ERROR: conversion failed. \"$output\" is very small." > /dev/stderr
+				failed=$failed"TINY_OUTPUT: $input\n"
+				countFailed=$(($countFailed+1))
+				rm "$output"
+				continue
+			elif [ "$outSize" == "0" ] ; then
+				printError "ERROR: conversion failed. \"$output\" is empty." > /dev/stderr
 				failed=$failed"EMPTY_OUTPUT: $input\n"
 				countFailed=$(($countFailed+1))
 				rm "$output"
@@ -269,24 +282,27 @@ while [ "$1" != "" ] ; do
 			fi
 			
 			#add warnings about file sizes
+			#if [ "$ratioPercent" -gt "$LARGE_RATIO" ] ; then
 			if [ "$outSize" -gt "$inSize" ] ; then
 				#the file got bigger
-				echo -e "WARNING: Output larger than input.\tRatio: $ratioPercent%"
-				succeed=$succeed"\tWARNING: Output larger than input.\tRatio: $ratioPercent%\n"
-				echo -e "\tWas: ${inSize} bytes\tIs: ${outSize} bytes\tDiff: "$(($outSize-$inSize))" bytes"
+				warnMessage="WARNING: Output larger than input.\tRatio: $ratioPercent%"
+				printWarning $warnMessage > /dev/stderr
+				succeed=$succeed`printWarning $warnMessage`"\n"
+				printWarning "\tWas: ${inSize} bytes\tIs: ${outSize} bytes\tDiff: "$(($outSize-$inSize))" bytes" > /dev/stderr
 			elif [ "$ratioPercent" -le "$SMALL_RATIO" ] ; then
-				#output file is very small in comparison
-				echo -e "WARNING: Very small output file.\tRatio: $ratioPercent%\tSize: "`du -h "$output" | awk '{print $1}'`
-				succeed=$succeed"\tWARNING: Very small output file.\tRatio: $ratioPercent%\tSize: "`du -h "$output" | awk '{print $1}'`"\n"
+				#output file is small in comparison
+				warnMessage="WARNING: Small output file.\tRatio: $ratioPercent%\tSize: "`du -h "$output" | awk '{print $1}'`
+				printWarning $warnMessage > /dev/stderr
+				succeed=$succeed"\t"`printWarning $warnMessage`"\n"
 			fi
 		else
-			echo "ERROR: conversion failed. \"$output\" does not exist." > /dev/stderr
+			printError "ERROR: conversion failed. \"$output\" does not exist." > /dev/stderr
 			failed=$failed"NO_OUTPUT: $input\n"
 			countFailed=$(($countFailed+1))
 			continue
 		fi
 	else
-		echo "ERROR: Input file \"$input\" does not exist" > /dev/stderr
+		printError "ERROR: Input file \"$input\" does not exist" > /dev/stderr
 		skipped=$skipped"NO_INPUT: $input\n"
 		countSkipped=$(($countSkipped+1))
 	fi
@@ -296,19 +312,19 @@ done
 #print results
 #TODO: add total sizes and space saved
 AllDiff=`timeDiff $allStart $end`
-echo "Conversion(s) completed. Time: $AllDiff"
-
+totalFiles=$(($countSucceed+$countFailed+$countSkipped))
+echo -e "\nDone with all conversions\n"
 if [ "$succeed" != "" ] ; then
 	echo "Files succeeded: $countSucceed"
 	echo -e "$succeed"
 fi
 if [ "$failed" != "" ] ; then
 	echo "Files failed: $countFailed"
-	echo -e "$failed"
+	printError "$failed"
 fi
 if [ "$skipped" != "" ] ; then
 	echo "Files skipped: $countSkipped"
-	echo -e "$skipped"
+	printWarning "$skipped"
 fi
-totalFiles=$(($countSucceed+$countFailed+$countSkipped))
+echo -e "Conversion(s) completed. Time: $AllDiff"
 echo -e "Total Files: $totalFiles\tSucceeded: $countSucceed\tFailed: $countFailed\tSkipped: $countSkipped"
