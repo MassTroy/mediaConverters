@@ -197,11 +197,16 @@ while [ "$1" != "" ] ; do
 	
 	#make sure that files arent the same
 	if [ "$input" == "$output" ] ; then
-		printError "ERROR: Input and Output files are the same!" > /dev/stderr
-		skipped=$skipped"IN_OUT_SAME: $input\n"
-		countSkipped=$(($countSkipped+1))
-		#skip this file
-		continue
+		newInput="${input%.*}.tmp.$FILE_EXTENSION"
+		mv "$input" "$newInput"
+		input="$newInput"
+		printWarning "WARNING: Input and Output files are the same. Creating Temporary"
+		
+		#printError "ERROR: Input and Output files are the same!" > /dev/stderr
+		#skipped=$skipped"IN_OUT_SAME: $input\n"
+		#countSkipped=$(($countSkipped+1))
+		##skip this file
+		#continue
 	fi
 	
 	#make sure input file exists
